@@ -32,6 +32,10 @@ struct Cli {
     /// CPU throttle factor (e.g. --throttle 20 divides all times by 20)
     #[arg(short, long)]
     throttle: Option<f64>,
+
+    /// Export only the comparison summary table (use with --export --compare)
+    #[arg(short, long)]
+    summary: bool,
 }
 
 fn file_stem(path: &str) -> String {
@@ -131,7 +135,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Export mode: skip TUI, output Markdown
     if let Some(ref export_target) = cli.export {
-        let md = export::export_markdown(&app);
+        let md = if cli.summary {
+            export::export_summary_only(&app)
+        } else {
+            export::export_markdown(&app)
+        };
         if export_target == "-" {
             print!("{}", md);
         } else {

@@ -26,6 +26,20 @@ fn pct_diff(a: f64, b: f64) -> String {
     }
 }
 
+pub fn export_summary_only(app: &App) -> String {
+    let mut out = String::new();
+
+    if let Some(ref cmp) = app.compare {
+        let name_a = &app.trace_name_a;
+        let name_b = app.trace_name_b.as_deref().unwrap_or("B");
+        export_compare_summary(&mut out, app, cmp, name_a, name_b);
+    } else {
+        out.push_str("No comparison data. Use --compare to compare two traces.\n");
+    }
+
+    out
+}
+
 pub fn export_markdown(app: &App) -> String {
     let mut out = String::new();
 
@@ -84,6 +98,7 @@ pub fn export_markdown(app: &App) -> String {
     // ── Compare ──
     if let Some(ref cmp) = app.compare {
         let name_b = app.trace_name_b.as_deref().unwrap_or("B");
+        export_compare_summary(&mut out, app, cmp, &app.trace_name_a, name_b);
         export_compare(&mut out, cmp, &app.trace_name_a, name_b);
     }
 
@@ -362,6 +377,246 @@ fn export_event_breakdown(out: &mut String, summary: &SummaryResult) {
         ));
     }
     out.push('\n');
+}
+
+fn fmt_change(a: f64, b: f64) -> String {
+    if a <= 0.0 && b <= 0.0 {
+        return "-".to_string();
+    }
+    if a <= 0.0 {
+        return "new".to_string();
+    }
+    let d = (b - a) / a * 100.0;
+    if d > 0.0 {
+        format!("+{:.0}% :red_circle:", d)
+    } else if d < -5.0 {
+        format!("{:.0}% :white_check_mark:", d)
+    } else {
+        format!("{:.0}%", d)
+    }
+}
+
+fn export_compare_summary(
+    out: &mut String,
+    _app: &App,
+    cmp: &CompareResult,
+    name_a: &str,
+    name_b: &str,
+) {
+    out.push_str(&format!(
+        "## Summary: {} vs {}\n\n",
+        name_a, name_b
+    ));
+
+    // ── Overall verdict based on P50 ──
+    let has_scroll = cmp.scroll_avg_a.is_some() && cmp.scroll_avg_b.is_some();
+    if has_scroll {
+        let p50_a = cmp.scroll_pct_a.p50_us;
+        let p50_b = cmp.scroll_pct_b.p50_us;
+        let p50_change = if p50_a > 0.0 {
+            (p50_b - p50_a) / p50_a * 100.0
+        } else {
+            0.0
+        };
+        let verdict = if p50_change < -5.0 {
+            "Improved"
+        } else if p50_change > 5.0 {
+            "Regressed"
+        } else {
+            "No significant change"
+        };
+        out.push_str(&format!(
+            "**Overall**: {} (Scroll P50 {:.0}%)\n\n",
+            verdict, p50_change
+        ));
+    }
+
+    // ── Scroll Performance ──
+    if let (Some(avg_a), Some(avg_b)) = (&cmp.scroll_avg_a, &cmp.scroll_avg_b) {
+        out.push_str("### Scroll Performance\n\n");
+        out.push_str("| Metric | Before | After | Change |\n");
+        out.push_str("|--------|--------|-------|--------|\n");
+
+        out.push_str(&format!(
+            "| P50 | {} | {} | {} |\n",
+            fmt_us(cmp.scroll_pct_a.p50_us), fmt_us(cmp.scroll_pct_b.p50_us),
+            fmt_change(cmp.scroll_pct_a.p50_us, cmp.scroll_pct_b.p50_us),
+        ));
+        out.push_str(&format!(
+            "| P90 | {} | {} | {} |\n",
+            fmt_us(cmp.scroll_pct_a.p90_us), fmt_us(cmp.scroll_pct_b.p90_us),
+            fmt_change(cmp.scroll_pct_a.p90_us, cmp.scroll_pct_b.p90_us),
+        ));
+        out.push_str(&format!(
+            "| Avg Duration | {} | {} | {} |\n",
+            fmt_us(avg_a.dur_us), fmt_us(avg_b.dur_us),
+            fmt_change(avg_a.dur_us, avg_b.dur_us),
+        ));
+        out.push_str(&format!(
+            "| JS | {} | {} | {} |\n",
+            fmt_us(avg_a.js_us), fmt_us(avg_b.js_us),
+            fmt_change(avg_a.js_us, avg_b.js_us),
+        ));
+        out.push_str(&format!(
+            "| Style (ULT) | {} | {} | {} |\n",
+            fmt_us(avg_a.ult_us), fmt_us(avg_b.ult_us),
+            fmt_change(avg_a.ult_us, avg_b.ult_us),
+        ));
+        out.push_str(&format!(
+            "| Layout | {} | {} | {} |\n",
+            fmt_us(avg_a.layout_us), fmt_us(avg_b.layout_us),
+            fmt_change(avg_a.layout_us, avg_b.layout_us),
+        ));
+        out.push_str(&format!(
+            "| Paint | {} | {} | {} |\n",
+            fmt_us(avg_a.paint_us), fmt_us(avg_b.paint_us),
+            fmt_change(avg_a.paint_us, avg_b.paint_us),
+        ));
+        out.push_str(&format!(
+            "| HitTest | {} | {} | {} |\n",
+            fmt_us(avg_a.hit_test_us), fmt_us(avg_b.hit_test_us),
+            fmt_change(avg_a.hit_test_us, avg_b.hit_test_us),
+        ));
+        out.push_str(&format!(
+            "| Composite | {} | {} | {} |\n",
+            fmt_us(avg_a.composite_us), fmt_us(avg_b.composite_us),
+            fmt_change(avg_a.composite_us, avg_b.composite_us),
+        ));
+        out.push('\n');
+    }
+
+    // ── Root Cause ──
+    // Collect root cause metrics: Style Elements, IO, Layout Dirty
+    let mut root_cause_rows: Vec<String> = Vec::new();
+
+    if cmp.style_recalc_a.total_count > 0 || cmp.style_recalc_b.total_count > 0 {
+        root_cause_rows.push(format!(
+            "| Style Elements (avg) | {:.0} | {:.0} | {} |",
+            cmp.style_recalc_a.avg_elements,
+            cmp.style_recalc_b.avg_elements,
+            fmt_change(cmp.style_recalc_a.avg_elements, cmp.style_recalc_b.avg_elements),
+        ));
+        root_cause_rows.push(format!(
+            "| Style Elements (max) | {} | {} | {} |",
+            cmp.style_recalc_a.max_elements,
+            cmp.style_recalc_b.max_elements,
+            fmt_change(cmp.style_recalc_a.max_elements as f64, cmp.style_recalc_b.max_elements as f64),
+        ));
+    }
+
+    root_cause_rows.push(format!(
+        "| Layout Dirty (avg) | {:.0} | {:.0} | {} |",
+        cmp.layout_a.avg_dirty,
+        cmp.layout_b.avg_dirty,
+        fmt_change(cmp.layout_a.avg_dirty, cmp.layout_b.avg_dirty),
+    ));
+
+    // IntersectionObserver from event rows (scroll-related)
+    let io_name = "IntersectionObserverController::computeIntersections";
+    if let Some(r) = cmp.rows.iter().find(|r| r.event_name == io_name) {
+        if r.avg_a_us > 0.0 || r.avg_b_us > 0.0 {
+            root_cause_rows.push(format!(
+                "| IO (avg) | {} | {} | {} |",
+                fmt_us(r.avg_a_us),
+                fmt_us(r.avg_b_us),
+                fmt_change(r.avg_a_us, r.avg_b_us),
+            ));
+        }
+    }
+
+    if !root_cause_rows.is_empty() {
+        out.push_str("### Root Cause\n\n");
+        out.push_str("| Metric | Before | After | Change |\n");
+        out.push_str("|--------|--------|-------|--------|\n");
+        for row in &root_cause_rows {
+            out.push_str(row);
+            out.push('\n');
+        }
+        out.push('\n');
+    }
+
+    // ── Regressions (scroll-related only) ──
+    if let (Some(avg_a), Some(avg_b)) = (&cmp.scroll_avg_a, &cmp.scroll_avg_b) {
+        let scroll_cats: Vec<(&str, f64, f64)> = vec![
+            ("JS", avg_a.js_us, avg_b.js_us),
+            ("Style (ULT)", avg_a.ult_us, avg_b.ult_us),
+            ("Layout", avg_a.layout_us, avg_b.layout_us),
+            ("Paint", avg_a.paint_us, avg_b.paint_us),
+            ("HitTest", avg_a.hit_test_us, avg_b.hit_test_us),
+            ("Composite", avg_a.composite_us, avg_b.composite_us),
+        ];
+
+        let regressions: Vec<_> = scroll_cats
+            .iter()
+            .filter(|(_, a, b)| {
+                if *a > 0.0 {
+                    let d = (b - a) / a * 100.0;
+                    d > 5.0
+                } else {
+                    *b > 0.0
+                }
+            })
+            .collect();
+
+        if !regressions.is_empty() {
+            out.push_str("### Regressions\n\n");
+            out.push_str("| Metric | Before | After | Change |\n");
+            out.push_str("|--------|--------|-------|--------|\n");
+            for (name, a, b) in &regressions {
+                out.push_str(&format!(
+                    "| {} | {} | {} | {} |\n",
+                    name, fmt_us(*a), fmt_us(*b), fmt_change(*a, *b),
+                ));
+            }
+            out.push('\n');
+        }
+    }
+
+    // ── Notes (non-scroll context) ──
+    let sa = &cmp.summary_a;
+    let sb = &cmp.summary_b;
+
+    let mut notes: Vec<String> = Vec::new();
+
+    // Long Tasks
+    let lt_change = if sa.long_task_count > 0 {
+        format!("{}", pct_diff(sa.long_task_count as f64, sb.long_task_count as f64))
+    } else {
+        "-".to_string()
+    };
+    notes.push(format!(
+        "Long Tasks: {} → {} ({}). Includes non-scroll tasks.",
+        sa.long_task_count, sb.long_task_count, lt_change,
+    ));
+
+    // Main Thread Busy
+    let busy_change = pct_diff(sa.main_thread_busy_us, sb.main_thread_busy_us);
+    notes.push(format!(
+        "Main Thread Busy: {} → {} ({}). Includes non-scroll tasks.",
+        fmt_us(sa.main_thread_busy_us), fmt_us(sb.main_thread_busy_us), busy_change,
+    ));
+
+    // GC (MajorGC + MinorGC)
+    let gc_names = ["MajorGC", "MinorGC"];
+    for gc_name in &gc_names {
+        if let Some(r) = cmp.rows.iter().find(|r| r.event_name == *gc_name) {
+            if r.avg_a_us > 0.0 || r.avg_b_us > 0.0 {
+                notes.push(format!(
+                    "{}: avg {} → {} ({})",
+                    gc_name, fmt_us(r.avg_a_us), fmt_us(r.avg_b_us),
+                    pct_diff(r.avg_a_us, r.avg_b_us),
+                ));
+            }
+        }
+    }
+
+    if !notes.is_empty() {
+        out.push_str("### Notes\n\n");
+        for note in &notes {
+            out.push_str(&format!("- {}\n", note));
+        }
+        out.push('\n');
+    }
 }
 
 fn export_compare(
