@@ -3,7 +3,7 @@ use crate::app::App;
 
 fn fmt_us(us: f64) -> String {
     if us.abs() < 0.01 {
-        "-".to_string()
+        "0".to_string()
     } else if us.abs() >= 1_000_000.0 {
         format!("{:.2}s", us / 1_000_000.0)
     } else if us.abs() >= 1_000.0 {
@@ -30,6 +30,35 @@ pub fn export_markdown(app: &App) -> String {
     let mut out = String::new();
 
     out.push_str(&format!("# Chrome Trace Analysis: {}\n\n", app.trace_name_a));
+    // Metadata block
+    if let Some(ref meta) = app.metadata {
+        out.push_str("**Trace Info**\n\n");
+        if let Some(ref url) = meta.page_url {
+            out.push_str(&format!("- **URL**: {}\n", url));
+        }
+        if let Some(ref start) = meta.start_time {
+            out.push_str(&format!("- **Recorded**: {}\n", start));
+        }
+        if let Some(cpu) = meta.cpu_throttling {
+            if cpu > 1.0 {
+                out.push_str(&format!("- **CPU Throttle**: {:.0}x (divide times by {:.0} for real-world)\n", cpu, cpu));
+            }
+        }
+        if let Some(ref net) = meta.network_throttling {
+            if !net.is_empty() && net != "No throttling" {
+                out.push_str(&format!("- **Network**: {}\n", net));
+            }
+        }
+        if let Some(dpr) = meta.host_dpr {
+            out.push_str(&format!("- **DPR**: {}\n", dpr));
+        }
+        out.push('\n');
+    } else if app.throttle_factor > 1.0 {
+        out.push_str(&format!(
+            "> **Note**: CPU throttle {:.0}x applied. Divide times by {:.0} for real-world estimates.\n\n",
+            app.throttle_factor, app.throttle_factor
+        ));
+    }
 
     // ── Overview ──
     export_overview(&mut out, &app.summary, &app.trace_name_a);

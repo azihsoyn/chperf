@@ -22,16 +22,27 @@ const COLOR_HITTEST: Color = Color::Red;
 
 // ── Formatting helpers ──
 
-fn fmt_time(us: f64, throttle: bool) -> String {
-    let v = if throttle { us / 20.0 } else { us };
+fn fmt_time(us: f64, factor: f64) -> String {
+    let v = us / factor;
     if v.abs() < 0.01 {
-        "-".to_string()
+        "0".to_string()
     } else if v.abs() >= 1_000_000.0 {
         format!("{:.2}s", v / 1_000_000.0)
     } else if v.abs() >= 1_000.0 {
         format!("{:.2}ms", v / 1_000.0)
     } else {
         format!("{:.0}us", v)
+    }
+}
+
+/// Format time with both trace and real time when throttled
+fn fmt_time_dual(us: f64, factor: f64) -> String {
+    if factor > 1.0 {
+        let trace = fmt_time(us, 1.0);
+        let real = fmt_time(us, factor);
+        format!("{} ({})", trace, real)
+    } else {
+        fmt_time(us, 1.0)
     }
 }
 
@@ -151,8 +162,8 @@ fn severity_label(us: f64) -> (&'static str, Color) {
 }
 
 /// How many frame budgets this duration takes
-fn frame_budget_ratio(us: f64, throttle: bool) -> f64 {
-    let v = if throttle { us / 20.0 } else { us };
+fn frame_budget_ratio(us: f64, factor: f64) -> f64 {
+    let v = us / factor;
     v / FRAME_BUDGET_US
 }
 
@@ -205,14 +216,38 @@ fn draw_tabs(frame: &mut Frame, app: &App, area: Rect) {
             .fg(Color::Cyan)
             .add_modifier(Modifier::BOLD),
     )];
-    if app.throttle_20x {
+    // Metadata badges
+    if let Some(ref meta) = app.metadata {
+        if let Some(ref start) = meta.start_time {
+            // Show date portion only
+            let date_str = if start.len() >= 10 { &start[..10] } else { start };
+            title_spans.push(Span::styled(
+                format!(" {} ", date_str),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+    }
+    if app.is_throttled() {
         title_spans.push(Span::styled(
-            " 20x THROTTLE ",
+            format!(" CPU {:.0}x ", app.throttle_factor),
             Style::default()
                 .fg(Color::Black)
                 .bg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         ));
+    }
+    if let Some(ref meta) = app.metadata {
+        if let Some(ref net) = meta.network_throttling {
+            if !net.is_empty() && net != "No throttling" {
+                title_spans.push(Span::styled(
+                    format!(" Net:{} ", net),
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Magenta)
+                        .add_modifier(Modifier::BOLD),
+                ));
+            }
+        }
     }
 
     let tabs = Tabs::new(titles)
@@ -245,20 +280,94 @@ fn draw_content(frame: &mut Frame, app: &App, area: Rect) {
 // ── Summary Tab ──
 
 fn draw_summary(frame: &mut Frame, app: &App, area: Rect) {
+    let has_meta = app.metadata.is_some();
     let has_diagnostics = app.forced_reflows.total_reflows > 0 || app.style_recalc.total_count > 0;
-    let diag_height = if has_diagnostics { 5 } else { 0 };
+    let meta_height: u16 = if has_meta { 3 } else { 0 };
+    let diag_height: u16 = if has_diagnostics { 5 } else { 0 };
     let chunks = Layout::vertical([
-        Constraint::Length(10),          // overview panel
-        Constraint::Length(diag_height), // diagnostics
-        Constraint::Min(0),             // event stats table
+        Constraint::Length(meta_height),  // trace metadata
+        Constraint::Length(10),           // overview panel
+        Constraint::Length(diag_height),  // diagnostics
+        Constraint::Min(0),              // event stats table
     ])
     .split(area);
 
-    draw_summary_overview(frame, app, chunks[0]);
-    if has_diagnostics {
-        draw_summary_diagnostics(frame, app, chunks[1]);
+    let mut idx = 0;
+    if has_meta {
+        draw_metadata_bar(frame, app, chunks[idx]);
+        idx += 1;
     }
-    draw_summary_table(frame, app, chunks[if has_diagnostics { 2 } else { 1 }]);
+    draw_summary_overview(frame, app, chunks[idx]);
+    idx += 1;
+    if has_diagnostics {
+        draw_summary_diagnostics(frame, app, chunks[idx]);
+        idx += 1;
+    }
+    draw_summary_table(frame, app, chunks[idx]);
+}
+
+fn draw_metadata_bar(frame: &mut Frame, app: &App, area: Rect) {
+    let meta = match &app.metadata {
+        Some(m) => m,
+        None => return,
+    };
+
+    let mut spans: Vec<Span> = Vec::new();
+
+    // Page URL
+    if let Some(ref url) = meta.page_url {
+        // Shorten URL: show host + path (no query)
+        let short = url
+            .find('?')
+            .map(|i| &url[..i])
+            .unwrap_or(url);
+        spans.push(Span::styled("  URL: ", Style::default().fg(Color::DarkGray)));
+        spans.push(Span::styled(
+            short.to_string(),
+            Style::default().fg(Color::Cyan),
+        ));
+        spans.push(Span::raw("  "));
+    }
+
+    // Recorded time
+    if let Some(ref start) = meta.start_time {
+        let display = if start.len() >= 19 {
+            start[..19].replace('T', " ")
+        } else {
+            start.clone()
+        };
+        spans.push(Span::styled("Recorded: ", Style::default().fg(Color::DarkGray)));
+        spans.push(Span::styled(display, Style::default().fg(Color::White)));
+        spans.push(Span::raw("  "));
+    }
+
+    // CPU throttle
+    if let Some(cpu) = meta.cpu_throttling {
+        if cpu > 1.0 {
+            spans.push(Span::styled(
+                format!("CPU: {:.0}x ", cpu),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
+    }
+
+    // DPR
+    if let Some(dpr) = meta.hardware_concurrency {
+        spans.push(Span::styled(
+            format!("Cores: {} ", dpr),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+
+    let panel = Paragraph::new(Line::from(spans)).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Trace Info ")
+            .title_style(Style::default().fg(Color::DarkGray)),
+    );
+    frame.render_widget(panel, area);
 }
 
 fn draw_summary_overview(frame: &mut Frame, app: &App, area: Rect) {
@@ -271,7 +380,7 @@ fn draw_summary_overview(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_summary_metrics(frame: &mut Frame, app: &App, area: Rect) {
-    let t = app.throttle_20x;
+    let t = app.throttle_factor;
     let s = &app.summary;
 
     let busy_pct = if s.total_trace_duration_us > 0.0 {
@@ -374,7 +483,7 @@ fn draw_summary_metrics(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_long_task_histogram(frame: &mut Frame, app: &App, area: Rect) {
-    let t = app.throttle_20x;
+    let t = app.throttle_factor;
     let s = &app.summary;
 
     if s.long_tasks_top.is_empty() {
@@ -431,7 +540,7 @@ fn draw_long_task_histogram(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_summary_diagnostics(frame: &mut Frame, app: &App, area: Rect) {
-    let t = app.throttle_20x;
+    let t = app.throttle_factor;
     let cols = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(area);
 
@@ -509,7 +618,7 @@ fn draw_summary_diagnostics(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_summary_table(frame: &mut Frame, app: &App, area: Rect) {
-    let t = app.throttle_20x;
+    let t = app.throttle_factor;
     let s = &app.summary;
 
     let max_total = s
@@ -617,7 +726,7 @@ fn draw_scroll_avg(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_scroll_metrics(frame: &mut Frame, app: &App, area: Rect) {
-    let t = app.throttle_20x;
+    let t = app.throttle_factor;
     let sf = &app.scroll_frames;
     let avg = &sf.avg;
 
@@ -649,24 +758,26 @@ fn draw_scroll_metrics(frame: &mut Frame, app: &App, area: Rect) {
         Line::from(vec![
             Span::styled("  Avg Duration:  ", Style::default().fg(Color::DarkGray)),
             Span::styled(
-                fmt_time(avg.dur_us, t),
+                fmt_time_dual(avg.dur_us, t),
                 Style::default()
                     .fg(sev_color)
                     .add_modifier(Modifier::BOLD),
             ),
+        ]),
+        Line::from(vec![
             Span::styled("  P50: ", Style::default().fg(Color::DarkGray)),
             Span::styled(
-                fmt_time(pct.p50_us, t),
+                fmt_time_dual(pct.p50_us, t),
                 Style::default().fg(Color::White),
             ),
             Span::styled("  P90: ", Style::default().fg(Color::DarkGray)),
             Span::styled(
-                fmt_time(pct.p90_us, t),
+                fmt_time_dual(pct.p90_us, t),
                 Style::default().fg(severity_label(pct.p90_us).1),
             ),
             Span::styled("  P99: ", Style::default().fg(Color::DarkGray)),
             Span::styled(
-                fmt_time(pct.p99_us, t),
+                fmt_time_dual(pct.p99_us, t),
                 Style::default().fg(severity_label(pct.p99_us).1),
             ),
         ]),
@@ -722,11 +833,14 @@ fn draw_scroll_metrics(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_scroll_breakdown_chart(frame: &mut Frame, app: &App, area: Rect) {
-    let t = app.throttle_20x;
+    let t = app.throttle_factor;
     let avg = &app.scroll_frames.avg;
     let total = avg.dur_us;
 
-    let categories: Vec<(&str, f64, Color)> = vec![
+    let accounted = avg.js_us + avg.ult_us + avg.layout_us + avg.paint_us + avg.composite_us + avg.hit_test_us;
+    let other_us = (total - accounted).max(0.0);
+
+    let mut categories: Vec<(&str, f64, Color)> = vec![
         ("JS", avg.js_us, COLOR_JS),
         ("Style", avg.ult_us, COLOR_STYLE),
         ("Layout", avg.layout_us, COLOR_LAYOUT),
@@ -734,6 +848,9 @@ fn draw_scroll_breakdown_chart(frame: &mut Frame, app: &App, area: Rect) {
         ("Composite", avg.composite_us, COLOR_COMPOSITE),
         ("HitTest", avg.hit_test_us, COLOR_HITTEST),
     ];
+    if other_us > 0.01 {
+        categories.push(("Other", other_us, Color::DarkGray));
+    }
 
     let bar_width = area.width.saturating_sub(4) as usize;
     let bar_spans = stacked_bar_spans(&categories, total, bar_width);
@@ -804,7 +921,7 @@ fn draw_scroll_breakdown_chart(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_scroll_tasks(frame: &mut Frame, app: &App, area: Rect) {
-    let t = app.throttle_20x;
+    let t = app.throttle_factor;
     let sf = &app.scroll_frames;
 
     let bar_width = 20;
@@ -818,8 +935,10 @@ fn draw_scroll_tasks(frame: &mut Frame, app: &App, area: Rect) {
             let bottleneck = task.bottleneck();
             let frames = frame_budget_ratio(task.dur_us, t);
 
-            // Colored mini bar
-            let parts = [
+            // Colored mini bar with Other
+            let accounted = task.js_us + task.ult_us + task.layout_us + task.paint_us + task.composite_us + task.hit_test_us;
+            let other = (task.dur_us - accounted).max(0.0);
+            let mut parts = vec![
                 (task.js_us, COLOR_JS),
                 (task.ult_us, COLOR_STYLE),
                 (task.layout_us, COLOR_LAYOUT),
@@ -827,6 +946,9 @@ fn draw_scroll_tasks(frame: &mut Frame, app: &App, area: Rect) {
                 (task.composite_us, COLOR_COMPOSITE),
                 (task.hit_test_us, COLOR_HITTEST),
             ];
+            if other > 0.01 {
+                parts.push((other, Color::DarkGray));
+            }
             let bar_spans = colored_mini_bar(&parts, task.dur_us, bar_width);
 
             // Build the breakdown cell with colored spans
@@ -932,7 +1054,7 @@ fn draw_cpu_profile(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_cpu_overview(frame: &mut Frame, app: &App, area: Rect) {
-    let t = app.throttle_20x;
+    let t = app.throttle_factor;
     let cp = &app.cpu_profile;
     let total = cp.total_sample_time_us;
 
@@ -1022,7 +1144,7 @@ fn draw_cpu_overview(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_cpu_table(frame: &mut Frame, app: &App, area: Rect) {
-    let t = app.throttle_20x;
+    let t = app.throttle_factor;
     let cp = &app.cpu_profile;
 
     let total_time = cp.total_sample_time_us;
@@ -1266,7 +1388,7 @@ fn draw_layout_overview(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_layout_table(frame: &mut Frame, app: &App, area: Rect) {
-    let t = app.throttle_20x;
+    let t = app.throttle_factor;
     let ld = &app.layout_dirty;
 
     let max_dirty = ld.max_dirty.max(1) as f64;
@@ -1461,7 +1583,7 @@ fn draw_compare_scroll_bars(
     cmp: &crate::analysis::CompareResult,
     area: Rect,
 ) {
-    let t = app.throttle_20x;
+    let t = app.throttle_factor;
     let cols =
         Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(area);
 
@@ -1484,7 +1606,9 @@ fn draw_compare_scroll_bars(
 
         if let Some(avg) = avg_opt {
             let bar_w = col_area.width.saturating_sub(4) as usize;
-            let categories: Vec<(&str, f64, Color)> = vec![
+            let accounted = avg.js_us + avg.ult_us + avg.layout_us + avg.paint_us + avg.composite_us + avg.hit_test_us;
+            let other = (avg.dur_us - accounted).max(0.0);
+            let mut categories: Vec<(&str, f64, Color)> = vec![
                 ("JS", avg.js_us, COLOR_JS),
                 ("Style", avg.ult_us, COLOR_STYLE),
                 ("Layout", avg.layout_us, COLOR_LAYOUT),
@@ -1492,6 +1616,9 @@ fn draw_compare_scroll_bars(
                 ("Comp", avg.composite_us, COLOR_COMPOSITE),
                 ("Hit", avg.hit_test_us, COLOR_HITTEST),
             ];
+            if other > 0.01 {
+                categories.push(("Other", other, Color::DarkGray));
+            }
             let bar_spans = stacked_bar_spans(&categories, avg.dur_us, bar_w);
 
             let (sev_label, sev_color) = severity_label(avg.dur_us);
@@ -1588,7 +1715,7 @@ fn draw_compare_metrics(
     cmp: &crate::analysis::CompareResult,
     area: Rect,
 ) {
-    let t = app.throttle_20x;
+    let t = app.throttle_factor;
 
     let cols = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(area);
@@ -1734,7 +1861,7 @@ fn draw_compare_bottom(
     cmp: &crate::analysis::CompareResult,
     area: Rect,
 ) {
-    let t = app.throttle_20x;
+    let t = app.throttle_factor;
 
     let cols = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(area);
@@ -1950,9 +2077,9 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         Span::raw(":Tab"),
     ];
 
-    if app.throttle_20x {
+    if app.is_throttled() {
         spans.push(Span::styled(
-            " [20x] ",
+            format!(" [{:.0}x] ", app.throttle_factor),
             Style::default()
                 .fg(Color::Black)
                 .bg(Color::Yellow)

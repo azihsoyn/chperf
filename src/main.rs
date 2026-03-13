@@ -28,6 +28,10 @@ struct Cli {
     /// Use --export to print to stdout, --export=FILE to write to file
     #[arg(short, long, num_args = 0..=1, default_missing_value = "-")]
     export: Option<String>,
+
+    /// CPU throttle factor (e.g. --throttle 20 divides all times by 20)
+    #[arg(short, long)]
+    throttle: Option<f64>,
 }
 
 fn file_stem(path: &str) -> String {
@@ -105,7 +109,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         compare_result,
         file_stem(&cli.trace),
         trace_name_b,
+        trace_a.metadata.clone(),
     );
+
+    // Apply throttle: CLI flag takes priority, otherwise auto-detect from trace metadata
+    let throttle = cli.throttle.unwrap_or_else(|| {
+        trace_a
+            .metadata
+            .as_ref()
+            .and_then(|m| m.cpu_throttling)
+            .unwrap_or(1.0)
+    });
+    if throttle > 1.0 {
+        app.throttle_factor = throttle;
+        app.throttle_factor_saved = throttle;
+        eprintln!("  CPU throttle: {:.0}x ({})",
+            throttle,
+            if cli.throttle.is_some() { "from --throttle" } else { "auto-detected from trace" }
+        );
+    }
 
     // Export mode: skip TUI, output Markdown
     if let Some(ref export_target) = cli.export {

@@ -1,4 +1,5 @@
 use crate::analysis::*;
+use crate::trace::TraceMetadata;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
@@ -37,7 +38,8 @@ impl Tab {
 pub struct App {
     pub tab: Tab,
     pub tabs: Vec<Tab>,
-    pub throttle_20x: bool,
+    pub throttle_factor: f64,      // 1.0 = no throttle, Nx = divide times by N
+    pub throttle_factor_saved: f64, // saved value for toggle
     pub scroll_offset: usize,
     pub should_quit: bool,
     pub summary: SummaryResult,
@@ -49,6 +51,7 @@ pub struct App {
     pub compare: Option<CompareResult>,
     pub trace_name_a: String,
     pub trace_name_b: Option<String>,
+    pub metadata: Option<TraceMetadata>,
     pub status_message: Option<String>,
 }
 
@@ -63,12 +66,14 @@ impl App {
         compare: Option<CompareResult>,
         trace_name_a: String,
         trace_name_b: Option<String>,
+        metadata: Option<TraceMetadata>,
     ) -> Self {
         let tabs = Tab::all(compare.is_some());
         App {
             tab: Tab::Summary,
             tabs,
-            throttle_20x: false,
+            throttle_factor: 1.0,
+            throttle_factor_saved: 20.0,
             scroll_offset: 0,
             should_quit: false,
             summary,
@@ -80,6 +85,7 @@ impl App {
             compare,
             trace_name_a,
             trace_name_b,
+            metadata,
             status_message: None,
         }
     }
@@ -101,7 +107,16 @@ impl App {
     }
 
     pub fn toggle_throttle(&mut self) {
-        self.throttle_20x = !self.throttle_20x;
+        if self.throttle_factor > 1.0 {
+            self.throttle_factor_saved = self.throttle_factor;
+            self.throttle_factor = 1.0;
+        } else {
+            self.throttle_factor = self.throttle_factor_saved;
+        }
+    }
+
+    pub fn is_throttled(&self) -> bool {
+        self.throttle_factor > 1.0
     }
 
     pub fn scroll_down(&mut self, amount: usize) {
