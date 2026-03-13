@@ -4,6 +4,8 @@ Chrome DevTools Performance trace analyzer with TUI. Parses `{ "traceEvents": [.
 
 Chrome DevTools trace JSON files are massive and impractical to read by hand. chperf structures and summarizes the trace, then exports it as Markdown. Feed the exported result directly to an LLM like Claude Code for instant bottleneck identification and improvement suggestions.
 
+![TUI Screenshot](capture.png)
+
 ## Install
 
 ```sh
@@ -92,6 +94,20 @@ chperf before.json --compare after.json --export --summary
 # Save to file
 chperf before.json --compare after.json --export=summary.md --summary
 ```
+
+#### Example output
+
+Ready to paste directly into a PR description:
+
+> **Overall**: Improved (Scroll P50 -45%)
+>
+> | Metric | Before | After | Change |
+> |--------|--------|-------|--------|
+> | P50 | 370.94ms | 203.22ms | -45% :white_check_mark: |
+> | P90 | 1.37s | 831.40ms | -39% :white_check_mark: |
+> | Style (ULT) | 330.70ms | 174.68ms | -47% :white_check_mark: |
+> | Paint | 26.61ms | 88.78ms | +234% :red_circle: |
+> | HitTest | 72.28ms | 28.49ms | -61% :white_check_mark: |
 
 ## TUI Keybindings
 
