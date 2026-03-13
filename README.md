@@ -2,6 +2,8 @@
 
 Chrome DevTools Performance trace analyzer with TUI. Parses `{ "traceEvents": [...] }` JSON and surfaces actionable performance insights.
 
+Chrome DevTools trace JSON files are massive and impractical to read by hand. chperf structures and summarizes the trace, then exports it as Markdown. Feed the exported result directly to an LLM like Claude Code for instant bottleneck identification and improvement suggestions.
+
 ## Install
 
 ```sh
@@ -103,19 +105,6 @@ chperf before.json --compare after.json --export=summary.md --summary
 | `t` | Toggle CPU throttle display (trace time vs real time) |
 | `e` | Export current analysis to `chperf-export-<name>.md` |
 | `q` / `Esc` / `Ctrl+c` | Quit |
-
-## Architecture
-
-```
-src/
-  main.rs      CLI entry, event loop
-  trace.rs     JSON parsing, main thread detection, metadata extraction
-  analysis.rs  All computation (summary, scroll frames, CPU profile,
-               layout dirty, style recalc, forced reflow, compare)
-  app.rs       Application state, tab management
-  ui.rs        TUI rendering (ratatui)
-  export.rs    Markdown export
-```
 
 ## Analyzed Events
 
