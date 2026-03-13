@@ -407,6 +407,20 @@ fn export_compare(
         cmp.layout_b.avg_dirty,
         pct_diff(cmp.layout_a.avg_dirty as f64, cmp.layout_b.avg_dirty as f64),
     ));
+    if cmp.style_recalc_a.total_count > 0 || cmp.style_recalc_b.total_count > 0 {
+        out.push_str(&format!(
+            "| Style Elements (avg) | {:.0} | {:.0} | {} |\n",
+            cmp.style_recalc_a.avg_elements,
+            cmp.style_recalc_b.avg_elements,
+            pct_diff(cmp.style_recalc_a.avg_elements, cmp.style_recalc_b.avg_elements),
+        ));
+        out.push_str(&format!(
+            "| Style Elements (max) | {} | {} | {} |\n",
+            cmp.style_recalc_a.max_elements,
+            cmp.style_recalc_b.max_elements,
+            pct_diff(cmp.style_recalc_a.max_elements as f64, cmp.style_recalc_b.max_elements as f64),
+        ));
+    }
     out.push('\n');
 
     // Scroll frame comparison

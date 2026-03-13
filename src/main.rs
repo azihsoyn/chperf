@@ -76,6 +76,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let cpu_profile_b = analysis::analyze_cpu_profile(&trace_b.trace_events);
         let layout_dirty_b =
             analysis::analyze_layout_dirty(&trace_b.trace_events, main_tid_b);
+        let style_recalc_b =
+            analysis::analyze_style_recalc(&trace_b.trace_events, main_tid_b);
         let cmp = analysis::analyze_compare(
             &summary_a,
             &summary_b,
@@ -85,6 +87,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &cpu_profile_b,
             &layout_dirty,
             &layout_dirty_b,
+            &style_recalc,
+            &style_recalc_b,
         );
         (Some(cmp), Some(file_stem(compare_path)))
     } else {

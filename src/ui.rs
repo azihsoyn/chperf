@@ -1368,11 +1368,16 @@ fn draw_compare(frame: &mut Frame, app: &App, area: Rect) {
         }
     };
 
+    let metrics_height = if cmp.style_recalc_a.total_count > 0 || cmp.style_recalc_b.total_count > 0 {
+        10
+    } else {
+        8
+    };
     let chunks = Layout::vertical([
-        Constraint::Length(4),  // header + findings
-        Constraint::Length(9),  // scroll frame side-by-side bars
-        Constraint::Length(8),  // key metrics comparison
-        Constraint::Min(0),    // bottom section (event table + cpu diff)
+        Constraint::Length(4),             // header + findings
+        Constraint::Length(9),             // scroll frame side-by-side bars
+        Constraint::Length(metrics_height), // key metrics comparison
+        Constraint::Min(0),               // bottom section (event table + cpu diff)
     ])
     .split(area);
 
@@ -1636,7 +1641,7 @@ fn draw_compare_metrics(
     let sa = &cmp.summary_a;
     let sb = &cmp.summary_b;
 
-    let metrics = [
+    let mut metrics = vec![
         (
             "Long Tasks",
             sa.long_task_count as f64,
@@ -1662,6 +1667,21 @@ fn draw_compare_metrics(
             false,
         ),
     ];
+    // Add style elements if either trace has data
+    if cmp.style_recalc_a.total_count > 0 || cmp.style_recalc_b.total_count > 0 {
+        metrics.push((
+            "Style Elem avg",
+            cmp.style_recalc_a.avg_elements,
+            cmp.style_recalc_b.avg_elements,
+            false,
+        ));
+        metrics.push((
+            "Style Elem max",
+            cmp.style_recalc_a.max_elements as f64,
+            cmp.style_recalc_b.max_elements as f64,
+            false,
+        ));
+    }
 
     let stat_lines: Vec<Line> = metrics
         .iter()

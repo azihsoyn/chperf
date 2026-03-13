@@ -32,8 +32,6 @@ const TARGET_EVENTS: &[&str] = &[
     "Commit",
     "HitTest",
     "IntersectionObserverController::computeIntersections",
-    "ResizeObserver::observe",
-    "MutationObserver",
     "MajorGC",
     "MinorGC",
     "EvaluateScript",
@@ -695,6 +693,8 @@ pub struct CompareResult {
     pub cpu_diff: Vec<CpuFunctionDiff>,
     pub layout_a: LayoutDirtyResult,
     pub layout_b: LayoutDirtyResult,
+    pub style_recalc_a: StyleRecalcResult,
+    pub style_recalc_b: StyleRecalcResult,
     pub findings: Vec<Finding>,
 }
 
@@ -715,6 +715,8 @@ pub fn analyze_compare(
     cpu_b: &CpuProfileResult,
     layout_a: &LayoutDirtyResult,
     layout_b: &LayoutDirtyResult,
+    style_recalc_a: &StyleRecalcResult,
+    style_recalc_b: &StyleRecalcResult,
 ) -> CompareResult {
     // ── Event rows ──
     let map_a: HashMap<&str, &EventTypeStat> = summary_a
@@ -997,6 +999,29 @@ pub fn analyze_compare(
         });
     }
 
+    // Style recalc elements
+    if style_recalc_a.total_count > 0 && style_recalc_b.total_count > 0 {
+        let elem_diff = pct_diff(style_recalc_a.avg_elements, style_recalc_b.avg_elements);
+        if elem_diff.abs() > 10.0 {
+            findings.push(Finding {
+                severity: if elem_diff < 0.0 {
+                    FindingSeverity::Improved
+                } else {
+                    FindingSeverity::Regressed
+                },
+                category: "Style Elements".to_string(),
+                message: format!(
+                    "Avg {:.0} -> {:.0} ({:+.1}%)",
+                    style_recalc_a.avg_elements, style_recalc_b.avg_elements, elem_diff
+                ),
+                detail: format!(
+                    "Max {} -> {}",
+                    style_recalc_a.max_elements, style_recalc_b.max_elements
+                ),
+            });
+        }
+    }
+
     // Sort findings: regressions first, then improvements
     findings.sort_by(|a, b| {
         let ord_a = match a.severity {
@@ -1023,6 +1048,8 @@ pub fn analyze_compare(
         cpu_diff,
         layout_a: layout_a.clone(),
         layout_b: layout_b.clone(),
+        style_recalc_a: style_recalc_a.clone(),
+        style_recalc_b: style_recalc_b.clone(),
         findings,
     }
 }
